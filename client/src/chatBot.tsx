@@ -5,6 +5,7 @@ interface Message {
   text?: string;
   component?: JSX.Element;
   isBot: boolean;
+  isAdvanced?: boolean;
 }
 
 interface BookingState {
@@ -18,7 +19,7 @@ interface BookingState {
 
 const MuseumChatbot: FC = () => {
   const [messages, setMessages] = useState<Message[]>([
-    { text: "Welcome to the Museum Reservation System! I'm here to help you book your visit. Would you like to make a reservation?", isBot: true }
+    { text: "Welcome to the Museum Information and Reservation System! I'm here to help you book your visit or answer any questions you may have. Would you like to make a reservation or ask a question?", isBot: true }
   ]);
   const [input, setInput] = useState<string>('');
   const [bookingState, setBookingState] = useState<BookingState>({
@@ -29,6 +30,7 @@ const MuseumChatbot: FC = () => {
     tickets: 0,
     userId: Math.random().toString(36).substr(2, 9),
   });
+  const [isAdvancedChatbot, setIsAdvancedChatbot] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -41,11 +43,15 @@ const MuseumChatbot: FC = () => {
     if (input.trim() === '') return;
     setMessages(prev => [...prev, { text: input, isBot: false }]);
     setInput('');
-    processUserInput(input);
+    if (isAdvancedChatbot) {
+      handleAdvancedChatbotQuery(input);
+    } else {
+      processUserInput(input);
+    }
   };
 
-  const botReply = (text: string) => {
-    setMessages(prev => [...prev, { text, isBot: true }]);
+  const botReply = (text: string, isAdvanced: boolean = false) => {
+    setMessages(prev => [...prev, { text, isBot: true, isAdvanced }]);
   };
 
   const processUserInput = async (userInput: string) => {
@@ -53,11 +59,22 @@ const MuseumChatbot: FC = () => {
 
     switch (bookingState.step) {
       case 'initial':
-        if (lowerInput.includes('yes') || lowerInput.includes('sure') || lowerInput.includes('ok') || lowerInput.includes('yeah')) {
+        if (lowerInput.includes('reservation') || lowerInput.includes('book') || lowerInput.includes('ticket')) {
           setBookingState(prev => ({ ...prev, step: 'museum' }));
           botReply("Great! Which museum would you like to visit? We have the Louvre, Metropolitan Museum of Art, British Museum, and National Gallery available.");
         } else {
-          botReply("I understand. If you change your mind, just let me know and I'll be happy to help you make a reservation.");
+          botReply("It seems like you have a question that might require more detailed information. Would you like to switch to our advanced FAQ chatbot? (Yes/No)", true);
+          setBookingState(prev => ({ ...prev, step: 'switch_to_advanced' }));
+        }
+        break;
+
+      case 'switch_to_advanced':
+        if (lowerInput.includes('yes') || lowerInput.includes('sure') || lowerInput.includes('ok') || lowerInput.includes('yeah')) {
+          setIsAdvancedChatbot(true);
+          botReply("Great! You're now connected to our advanced FAQ chatbot. How can I assist you today?", true);
+        } else {
+          setBookingState(prev => ({ ...prev, step: 'museum' }));
+          botReply("Alright, let's continue with the reservation process. Which museum would you like to visit?");
         }
         break;
 
@@ -89,7 +106,6 @@ const MuseumChatbot: FC = () => {
         if (timeMatch) {
           const requestedTime = timeMatch[0];
           try {
-            // Simulate fetching availability
             const availableTickets = await checkAvailability(bookingState.museum, bookingState.date, requestedTime);
 
             if (availableTickets > 0) {
@@ -114,6 +130,25 @@ const MuseumChatbot: FC = () => {
         }
         break;
 
+      case 'tickets':
+        const ticketRegex = /(\d+)/;
+        const ticketMatch = lowerInput.match(ticketRegex);
+        if (ticketMatch) {
+          const tickets = parseInt(ticketMatch[0]);
+          setBookingState(prev => ({ ...prev, tickets, step: 'confirm' }));
+          botReply(`Great! I've noted that you want ${tickets} ticket(s). Here's a summary of your booking:
+          
+Museum: ${bookingState.museum}
+Date: ${bookingState.date}
+Time: ${bookingState.timeSlot}
+Tickets: ${tickets}
+
+Is this correct? (Please respond with Yes or No)`);
+        } else {
+          botReply("I'm sorry, I couldn't understand the number of tickets. Could you please provide a number?");
+        }
+        break;
+
       case 'confirm':
         if (lowerInput.includes('yes')) {
           try {
@@ -132,19 +167,61 @@ const MuseumChatbot: FC = () => {
             botReply("I apologize, but there was an error processing your reservation. Please try again later.");
             setBookingState(prev => ({ ...prev, step: 'initial' }));
           }
+        } else if (lowerInput.includes('no')) {
+          setBookingState(prev => ({ ...prev, step: 'museum' }));
+          botReply("I'm sorry about that. Let's start over. Which museum would you like to visit?");
         } else {
           botReply("I'm sorry, I didn't understand that. Could you please respond with Yes to confirm the booking or No to start over?");
         }
         break;
 
+      case 'alternate_time':
+        if (lowerInput.includes('yes')) {
+          setBookingState(prev => ({ ...prev, step: 'tickets' }));
+          botReply(`Great! How many tickets would you like to book for ${bookingState.timeSlot}?`);
+        } else {
+          botReply("I understand. Would you like to try a different date? (Yes/No)");
+          setBookingState(prev => ({ ...prev, step: 'retry_date' }));
+        }
+        break;
+
+      case 'retry_date':
+        if (lowerInput.includes('yes')) {
+          setBookingState(prev => ({ ...prev, step: 'date', date: '', timeSlot: '' }));
+          botReply("Alright, let's try a different date. What date would you like to visit? (Please use the format MM/DD/YYYY)");
+        } else {
+          botReply("I'm sorry we couldn't find a suitable time for your visit. Is there anything else I can help you with?");
+          setBookingState(prev => ({ ...prev, step: 'initial', museum: '', date: '', timeSlot: '', tickets: 0 }));
+        }
+        break;
+
       default:
-        botReply("I'm sorry, I'm not sure how to help with that. Would you like to make a new reservation?");
-        setBookingState({ step: 'initial', museum: '', date: '', timeSlot: '', tickets: 0, userId: bookingState.userId });
+        botReply("I'm sorry, I'm not sure how to help with that. Would you like to make a new reservation or ask a question?");
+        setBookingState(prev => ({ ...prev, step: 'initial', museum: '', date: '', timeSlot: '', tickets: 0 }));
+    }
+  };
+
+  const handleAdvancedChatbotQuery = async (query: string) => {
+    try {
+      const response = await fetch('https://bitrulesapp-0a0366834134.herokuapp.com/items/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ID: bookingState.userId,
+          query: query,
+        }),
+      });
+      const data = await response.json();
+      botReply(data.response, true);
+    } catch (error) {
+      console.error('Error fetching response from advanced chatbot:', error);
+      botReply("I'm sorry, but I'm having trouble connecting to our advanced system right now. Can I help you with booking a ticket instead?", true);
     }
   };
 
   const checkAvailability = async (museum: string, date: string, timeSlot: string): Promise<number> => {
-    // Simulated API call to check ticket availability using fetch
     try {
       const response = await fetch(`http://localhost:3000/api/check-availability?museum=${museum}&date=${date}&timeSlot=${timeSlot}`);
       const data = await response.json();
@@ -156,7 +233,6 @@ const MuseumChatbot: FC = () => {
   };
 
   const findNextAvailableSlot = async (museum: string, date: string, startTime: string): Promise<string | null> => {
-    // Simulated API call to find the next available slot using fetch
     try {
       const response = await fetch(`http://localhost:3000/api/next-available-slot?museum=${museum}&date=${date}&startTime=${startTime}`);
       const data = await response.json();
@@ -168,7 +244,6 @@ const MuseumChatbot: FC = () => {
   };
 
   const bookTickets = async (userId: string, museum: string, date: string, timeSlot: string, tickets: number): Promise<boolean> => {
-    // Simulated API call to book tickets using fetch
     try {
       const response = await fetch('http://localhost:3000/api/book-ticket', {
         method: 'POST',
@@ -189,7 +264,7 @@ const MuseumChatbot: FC = () => {
     const ticketComponent = (
       <div className="ticket-container">
         <h3>Your ticket is ready!</h3>
-        <a href="http://localhost:3000/api/download-ticket/ticketId" download="museum_ticket.pdf" className="download-button">
+        <a href={`http://localhost:3000/api/download-ticket/${bookingState.userId}`} download="museum_ticket.pdf" className="download-button">
           Download Ticket
         </a>
       </div>
@@ -199,12 +274,12 @@ const MuseumChatbot: FC = () => {
 
   return (
     <div className="chatbot-container">
-            <div className="header">
-        <h1>Museum Reservation System</h1>
+      <div className="header">
+        <h1>Museum Information and Reservation System</h1>
       </div>
       <div className="chat-area">
         {messages.map((message, index) => (
-          <div key={index} className={`message ${message.isBot ? 'bot' : 'user'}`}>
+          <div key={index} className={`message ${message.isBot ? (message.isAdvanced ? 'bot advanced' : 'bot') : 'user'}`}>
             {message.text && <p>{message.text}</p>}
             {message.component && message.component}
           </div>
@@ -231,4 +306,3 @@ const MuseumChatbot: FC = () => {
 };
 
 export default MuseumChatbot;
-

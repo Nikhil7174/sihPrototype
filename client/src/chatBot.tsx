@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, FC } from 'react';
 import { Send } from 'lucide-react';
+import QRCode from 'react-qr-code';
 
 interface Message {
   text?: string;
@@ -16,6 +17,14 @@ interface BookingState {
   tickets: number;
   userId: string;
 }
+
+const availabilityData = [
+  { museum: 'The Louvre', date: '2024-09-15', timeSlot: '10:00', availableTickets: 5 },
+  { museum: 'The Louvre', date: '2024-09-15', timeSlot: '12:00', availableTickets: 0 },
+  { museum: 'The British Museum', date: '2024-09-15', timeSlot: '14:00', availableTickets: 10 },
+  { museum: 'The Metropolitan Museum of Art', date: '2024-09-17', timeSlot: '03:00 PM', availableTickets: 3 },
+  { museum: 'The Metropolitan Museum of Art', date: '2024-09-17', timeSlot: '11:00 AM', availableTickets: 2 },
+];
 
 const MuseumChatbot: FC = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -100,35 +109,56 @@ const MuseumChatbot: FC = () => {
         }
         break;
 
-      case 'time':
-        const timeRegex = /(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i;
-        const timeMatch = lowerInput.match(timeRegex);
-        if (timeMatch) {
-          const requestedTime = timeMatch[0];
-          try {
-            const availableTickets = await checkAvailability(bookingState.museum, bookingState.date, requestedTime);
-
-            if (availableTickets > 0) {
-              setBookingState(prev => ({ ...prev, timeSlot: requestedTime, step: 'tickets' }));
-              botReply(`Great! We have tickets available for ${requestedTime}. How many tickets would you like to book?`);
-            } else {
-              const nextAvailableSlot = await findNextAvailableSlot(bookingState.museum, bookingState.date, requestedTime);
-              if (nextAvailableSlot) {
-                botReply(`I'm sorry, but the ${requestedTime} slot is not available. The next available slot is at ${nextAvailableSlot}. Would you like to book for this time instead? (Yes/No)`);
-                setBookingState(prev => ({ ...prev, step: 'alternate_time', timeSlot: nextAvailableSlot }));
-              } else {
-                botReply(`I'm sorry, but there are no available slots for the rest of the day. Would you like to try a different date? (Yes/No)`);
-                setBookingState(prev => ({ ...prev, step: 'retry_date' }));
+        case 'time':
+          const timeRegex = /(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i;
+          const timeMatch = lowerInput.match(timeRegex);
+        
+          if (timeMatch) {
+            const requestedTimeStr = timeMatch[0].toLowerCase().trim();
+            
+            const currentDate = new Date();
+            const requestedTime = new Date(currentDate);
+            const [time, period] = requestedTimeStr.split(/\s*(am|pm)\s*/);
+            const [hours, minutes = 0] = time.split(':').map(Number);
+        
+            requestedTime.setHours(period === 'pm' && hours !== 12 ? hours + 12 : hours === 12 && period === 'am' ? 0 : hours);
+            requestedTime.setMinutes(minutes);
+        
+            const startTime = new Date(currentDate);
+            startTime.setHours(9, 0, 0); // 9:00 AM
+        
+            const endTime = new Date(currentDate);
+            endTime.setHours(16, 0, 0); // 4:00 PM
+        
+            if (requestedTime >= startTime && requestedTime <= endTime) {
+              try {
+                const availableTickets = 5;
+        
+                if (availableTickets > 0) {
+                  setBookingState(prev => ({ ...prev, timeSlot: requestedTimeStr, step: 'tickets' }));
+                  botReply(`Great! We have tickets available for ${requestedTimeStr}. How many tickets would you like to book?`);
+                } else {
+                  const nextAvailableSlot = await findNextAvailableSlot(bookingState.museum, bookingState.date, requestedTimeStr);
+                  if (nextAvailableSlot) {
+                    botReply(`I'm sorry, but the ${requestedTimeStr} slot is not available. The next available slot is at ${nextAvailableSlot}. Would you like to book for this time instead? (Yes/No)`);
+                    setBookingState(prev => ({ ...prev, step: 'alternate_time', timeSlot: nextAvailableSlot }));
+                  } else {
+                    botReply(`I'm sorry, but there are no available slots for the rest of the day. Would you like to try a different date? (Yes/No)`);
+                    setBookingState(prev => ({ ...prev, step: 'retry_date' }));
+                  }
+                }
+              } catch (error) {
+                console.error('Error checking availability:', error);
+                botReply("I'm sorry, but there was an error checking availability. Please try again later.");
               }
+            } else {
+              botReply("Please select a time between 9:00 AM and 4:00 PM.");
             }
-          } catch (error) {
-            console.error('Error checking availability:', error);
-            botReply("I'm sorry, but there was an error checking availability. Please try again later.");
+          } else {
+            botReply("I'm sorry, I couldn't understand that time. Could you please specify a time between 9:00 AM and 4:00 PM?");
           }
-        } else {
-          botReply("I'm sorry, I couldn't understand that time. Could you please specify a time between 9:00 AM and 4:00 PM?");
-        }
-        break;
+          break;
+        
 
       case 'tickets':
         const ticketRegex = /(\d+)/;
@@ -219,59 +249,52 @@ Is this correct? (Please respond with Yes or No)`);
       console.error('Error fetching response from advanced chatbot:', error);
       botReply("I'm sorry, but I'm having trouble connecting to our advanced system right now. Can I help you with booking a ticket instead?", true);
     }
-  };
+  };  
 
-  const checkAvailability = async (museum: string, date: string, timeSlot: string): Promise<number> => {
-    try {
-      const response = await fetch(`http://localhost:3000/api/check-availability?museum=${museum}&date=${date}&timeSlot=${timeSlot}`);
-      const data = await response.json();
-      return data.availableTickets || 0;
-    } catch (error) {
-      console.error('Error checking availability:', error);
-      return 0;
-    }
+  const findNextAvailableSlot = (museum: string, date: string, startTime: string): string | null => {
+    const availableSlots = availabilityData
+      .filter((entry) => entry.museum.toLowerCase() === museum.toLowerCase() &&
+                         entry.date === date &&
+                         entry.availableTickets > 0)
+      .map((entry) => entry.timeSlot);
+    
+    const nextAvailableSlot = availableSlots.find((slot) => slot > startTime);
+    return nextAvailableSlot || null;
   };
+  
 
-  const findNextAvailableSlot = async (museum: string, date: string, startTime: string): Promise<string | null> => {
-    try {
-      const response = await fetch(`http://localhost:3000/api/next-available-slot?museum=${museum}&date=${date}&startTime=${startTime}`);
-      const data = await response.json();
-      return data.nextAvailableSlot || null;
-    } catch (error) {
-      console.error('Error finding next available slot:', error);
-      return null;
-    }
-  };
-
-  const bookTickets = async (userId: string, museum: string, date: string, timeSlot: string, tickets: number): Promise<boolean> => {
-    try {
-      const response = await fetch('http://localhost:3000/api/book-ticket', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId, museum, date, timeSlot, tickets }),
-      });
-      const data = await response.json();
-      return data.success;
-    } catch (error) {
-      console.error('Error booking ticket:', error);
-      return false;
-    }
+  const bookTickets = (userId: string, museum: string, date: string, timeSlot: string, tickets: number): boolean => {
+    console.log(`Booking successful for User ID: ${userId}, Museum: ${museum}, Date: ${date}, TimeSlot: ${timeSlot}, Tickets: ${tickets}`);
+    return true;  // Simulate successful booking
   };
 
   const generateTicketDownloadLink = () => {
-    const ticketComponent = (
-      <div className="ticket-container">
-        <h3>Your ticket is ready!</h3>
-        <a href={`http://localhost:3000/api/download-ticket/${bookingState.userId}`} download="museum_ticket.pdf" className="download-button">
-          Download Ticket
-        </a>
-      </div>
-    );
-    setMessages(prev => [...prev, { component: ticketComponent, isBot: true }]);
-  };
-
+      // Generate ticket details
+      const ticketDetails = `
+        Museum: ${bookingState.museum}
+        Date: ${bookingState.date}
+        Time: ${bookingState.timeSlot}
+        Tickets: ${bookingState.tickets}
+      `;
+  
+      const qrCodeData = `${bookingState.museum},${bookingState.date},${bookingState.timeSlot},${bookingState.tickets},${bookingState.userId}`;
+  
+      const qrCode = (
+        <QRCode
+          value={qrCodeData}
+          size={128} // Adjust the size as needed
+          bgColor={"white"}
+          fgColor={"black"}
+        />
+      );
+  
+      setMessages(prev => [
+        ...prev, 
+        { component: <pre>{ticketDetails}</pre>, isBot: true },
+        { component: qrCode, isBot: true }
+      ]);
+    };
+  
   return (
     <div className="chatbot-container">
       <div className="header">
